@@ -1,0 +1,125 @@
+x-app-environment: &app-environment
+  APP_NAME: Simple KRS
+  APP_ENV: local
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY}
+  APP_URL: http://simple-krs.localhost:8081
+  APP_LOCALE: id
+  APP_FALLBACK_LOCALE: id
+  APP_NODE_ID: unset
+
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: info
+
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: ${DB_DATABASE:-simple_krs}
+  DB_USERNAME: ${DB_USERNAME}
+  DB_PASSWORD: ${DB_PASSWORD}
+
+  DB_READ_HOST: postgres-replica
+  DB_READ_PORT: 5432
+  DB_READ_USERNAME: ${DB_READ_USERNAME}
+  DB_READ_PASSWORD: ${DB_READ_PASSWORD}
+
+  SESSION_DRIVER: database
+  CACHE_STORE: database
+  QUEUE_CONNECTION: database
+
+  BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-log}
+
+  # Koneksi dari PHP di container ke Reverb yang berjalan di host.
+  REVERB_HOST: host.docker.internal
+  REVERB_PORT: 8080
+  REVERB_SCHEME: http
+
+x-app-common: &app-common
+  build:
+    context: ../simple-krs-app
+    args:
+      VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-}
+      VITE_REVERB_HOST: ${VITE_REVERB_HOST:-simple-krs.localhost}
+      VITE_REVERB_PORT: ${VITE_REVERB_PORT:-8080}
+      VITE_REVERB_SCHEME: ${VITE_REVERB_SCHEME:-http}
+
+  image: simple-krs:phase6
+  restart: unless-stopped
+
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+  networks:
+    - ingest-net
+    - krs-db-net
+
+  healthcheck:
+    test:
+      - CMD
+      - php
+      - -r
+      - '$$r=@file_get_contents("http://127.0.0.1:8000/up"); exit($$r===false?1:0);'
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 30s
+
+  labels:
+    - "traefik.enable=true"
+    - "traefik.docker.network=ingest-net"
+    - "traefik.http.routers.simple-krs.rule=Host(`simple-krs.localhost`)"
+    - "traefik.http.routers.simple-krs.entrypoints=web"
+    - "traefik.http.services.simple-krs.loadbalancer.server.port=8000"
+
+services:
+  app-1:
+    <<: *app-common
+    environment:
+      <<: *app-environment
+      APP_NODE_ID: app-1
+
+  app-2:
+    <<: *app-common
+    environment:
+      <<: *app-environment
+      APP_NODE_ID: app-2
+
+  app-3:
+    <<: *app-common
+    environment:
+      <<: *app-environment
+      APP_NODE_ID: app-3
+
+  traefik-simple-krs:
+    image: traefik:v3.7
+    container_name: traefik-simple-krs
+    restart: unless-stopped
+
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=ingest-net"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+
+    ports:
+      - "127.0.0.1:8081:80"
+      - "127.0.0.1:8082:8080"
+
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - ingest-net
+
+networks:
+  ingest-net:
+    external: true
+
+  krs-db-net:
+    name: pg-replica_krs-db-net
+    external: true
